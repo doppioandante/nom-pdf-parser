@@ -1,0 +1,11 @@
+[package]
+name = "pdf-render"
+version = "0.1.0"
+authors = ["Enrico Lumetti <enrico.lumetti@gmail.com>"]
+
+[lib]
+name = "pdf"
+path = "src/lib.rs"
+
+[dependencies]
+nom = "^3.2"
