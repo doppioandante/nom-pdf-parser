@@ -54,8 +54,39 @@ named!(integer <PdfObject>,
     )
 );
 
+named!(real <PdfObject>,
+    map!(
+        do_parse!(
+            sign: opt!(alt!(tag!("-") | tag!("+"))) >>
+            integral: opt!(digit) >>
+            tag!(".") >>
+            result: map!(
+                opt!(digit),
+                |parsed_digits| {
+                    let mut real_parsed = String::new();
+                    // FIXME: is from_utf8 slow?
+                    if let Some(c) = sign {
+                        real_parsed += from_utf8(c).unwrap();
+                    }
+                    if let Some(parsed) = integral {
+                        real_parsed += from_utf8(parsed).unwrap();
+                    }
+                    real_parsed += ".";
+                    if parsed_digits.is_some() {
+                        real_parsed += from_utf8(parsed_digits.unwrap()).unwrap();
+                    }
+                    f64::from_str(real_parsed.as_str()).unwrap()
+                }
+            ) >>
+            (result)
+        ),
+        PdfObject::Real
+    )
+);
+
+
 fn main() {
     let data = include_bytes!("parse_data");
-    let res = integer(data);
+    let res = real(data);
     println!("{:?}", res);
 }
