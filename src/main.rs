@@ -1,17 +1,61 @@
-extern crate cairo;
-use std::fs::File;
+#[macro_use]
+extern crate nom;
+
+use nom::{digit};
+use std::str::{FromStr, from_utf8};
+
+#[derive(Debug)]
+enum PdfObject {
+    Boolean(bool),
+    Integer(i32), // see limits?
+    Real(f64)
+}
+
+fn from_bool_literal(s:&[u8]) -> bool {
+    if s == b"true" {
+        return true;
+    }
+    if s == b"false" {
+        return false;
+    }
+    unreachable!();
+}
+
+named!(boolean <PdfObject>,
+    map!(
+        map!(
+            alt!(tag!("true") | tag!("false")),
+            from_bool_literal
+        ),
+        PdfObject::Boolean
+    )
+);
+
+named!(integer <PdfObject>,
+    map!(
+        do_parse!(
+            sign: opt!(alt!(tag!("-") | tag!("+"))) >>
+            number: map!(
+                digit,
+                |parsed_digits| {
+                    // FIXME: is from_utf8 slow?
+                    let mut value = i32::from_str(from_utf8(parsed_digits).unwrap()).unwrap();
+                    if let Some(c) = sign {
+                        if c == b"-" {
+                            value = -value;
+                        }
+                    }
+                    value
+                }
+            ) >>
+            (number)
+        ),
+        PdfObject::Integer
+    )
+);
 
 fn main() {
-    let surface = cairo::ImageSurface::create(cairo::Format::Rgb24, 500, 500)
-                  .expect("Could not create a Cairo surface");
-
-    let ctx = cairo::Context::new(&surface);
-
-    ctx.set_line_width(0.8);
-    ctx.set_source_rgb(0.5, 0.0, 0.0);
-    ctx.rectangle(0.25, 0.25, 300.0, 300.0);
-    ctx.stroke();
-
-    let mut buffer = File::create("img.png").unwrap();
-    surface.write_to_png(&mut buffer).unwrap();
+    let data = include_bytes!("parse_data");
+    let res = integer(data);
+    println!("{:?}", res);
 }
