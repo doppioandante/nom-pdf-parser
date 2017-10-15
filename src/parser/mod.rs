@@ -2,11 +2,9 @@ extern crate nom;
 
 use nom::{digit, hex_digit, IResult, ErrorKind, Needed};
 use std::str::{FromStr, from_utf8};
-
 use std::collections::HashMap;
 
-// Needed to use HashMap::from_iter
-use std::iter::FromIterator;
+use super::XRef;
 
 #[derive(Debug)]
 pub enum PdfObject {
@@ -22,10 +20,20 @@ pub enum PdfObject {
     Reference(i32, i32)
 }
 
-//impl PdfObject {
-//    fn evaluate(&self) -> PdfObject {
-//        if let PdfObject::Reference
-//    
+impl PdfObject {
+    fn evaluate_reference(&self, xref: &XRef, data: &[u8]) -> Option<PdfObject> {
+        if let &PdfObject::Reference(n, _) = self {
+            let offset = xref.get_offset(n as u32) as usize;
+            let res = object(&data[offset..], xref, data);
+            if let IResult::Done(_, PdfObject::Indirect(_, _, o)) = res {
+                return Some(*o)
+            }
+        }
+
+        None
+    }
+}
+    
 
 fn from_bool_literal(s:&[u8]) -> bool {
     if s == b"true" {
@@ -37,11 +45,31 @@ fn from_bool_literal(s:&[u8]) -> bool {
     unreachable!();
 }
 
-named!(pub object <PdfObject>,
-    alt!(
-        boolean | reference | indirect_object | real | integer | dictionary | hex_literal | string_literal | name_object | array
+pub fn object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
+    alt!(input,
+        boolean | reference | apply!(indirect_object, xref, data) | real | integer | apply!(dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
     )
-);
+}
+
+pub fn indirect_object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
+    map!(input,
+        do_parse!(
+            number: digit >>
+            generation: ws!(digit) >>
+            ws!(tag!("obj")) >>
+            object: alt!(
+                boolean | real | integer | apply!(stream_or_dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
+            ) >>
+            tag!("endobj") >>
+            (number, generation, object)
+        ),
+        |(n, g, object)| {
+            let number = i32::from_str(from_utf8(n).unwrap()).unwrap();
+            let generation = i32::from_str(from_utf8(g).unwrap()).unwrap();
+            PdfObject::Indirect(number, generation, Box::new(object))
+        }
+    )
+}
 
 named!(boolean <PdfObject>,
     map!(
@@ -310,24 +338,24 @@ named!(name_object <PdfObject>,
     )
 );
 
-named!(array <PdfObject>,
+pub fn array<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
     // FIXME: not sure about whitespace handling
-    map!(
+    map!(input,
         delimited!(
             ws!(char!('[')),
             separated_list!(
                 nom::multispace,
-                object
+                apply!(object, xref, data)
             ),
             ws!(char!(']'))
         ),
         PdfObject::Array
     )
-);
+}
 
-named!(dictionary <PdfObject>,
+pub fn dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
    // FIXME: not sure about whitespace handling
-   map!(
+   map!(input,
        delimited!(
            ws!(tag!("<<")),
            separated_list!(
@@ -335,14 +363,13 @@ named!(dictionary <PdfObject>,
                // dict entry
                do_parse!(
                    key: ws!(name_object) >>
-                   entry: object >>
+                   entry: apply!(object, xref, data) >>
                    (key, entry)
                )
            ),
            ws!(tag!(">>"))
        ),
        |vec| {
-
            let mut dict = HashMap::new();
 
            for (key, entry) in vec {
@@ -353,46 +380,54 @@ named!(dictionary <PdfObject>,
            PdfObject::Dictionary(dict)
        }
    )
-);
+}
 
 // should probably be a macro
-fn stream_bytes<'a>(dict: &PdfObject) -> Box<Fn(&'a [u8]) -> IResult<&'a [u8], &'a [u8]>> {
+// or maybe, can be merged into stream_bytes_helpers
+fn stream_bytes<'a>(dict: &PdfObject, xref: &XRef, data: &'a [u8]) -> Box<Fn(&'a [u8]) -> IResult<&'a [u8], &'a [u8]>> {
     if let PdfObject::Dictionary(ref hash_map) = *dict {
-
-        if let Some(&PdfObject::Integer(length)) = hash_map.get(b"Length".as_ref()) {
-            Box::new(move |bytes| {
+        if let Some(ref object) = hash_map.get(b"Length".as_ref()) {
+            // TODO: fix
+        //    let length = if let object.evaluate_reference(xref, data);
+            if let Some(&PdfObject::Integer(length)) = object {
+                Box::new(move |bytes| {
                     take!(bytes, length)
-            })
+                })
+            } else {
+                Box::new(|_| {
+                    error_code!(IResult::Error(ErrorKind::Custom(5)))
+                })
+            }
         }
         else {
             Box::new(|_| {
-                error_code!(IResult::Error(ErrorKind::Custom(4)))
+                error_code!(IResult::Error(ErrorKind::Custom(5)))
             })
         }
     }
     else {
         Box::new(|_| {
-            error_code!(IResult::Error(ErrorKind::Custom(4)))
+            error_code!(IResult::Error(ErrorKind::Custom(6)))
         })
     }
 }
 
-// workaround, thanks #nom channel
-fn stream_bytes_helper<'a>(input: &'a [u8], dict: & PdfObject) -> IResult<&'a [u8], &'a [u8]> {
-    let f = stream_bytes(&dict);
+// workaround, thanks sebk from #nom channel
+fn stream_bytes_helper<'a>(input: &'a [u8], dict: &PdfObject, xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
+    let f = stream_bytes(&dict, xref, data);
     f(input)
 }
 
-named!(stream_or_dictionary <PdfObject>,
-    map!(
+pub fn stream_or_dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
+    map!(input,
         do_parse!(
-            dict: dictionary >>
+            dict: apply!(dictionary, xref, data) >>
             stream: opt!(
                 do_parse!(
                     // dictionary eats previous space
                     tag!("stream") >>
                     alt!(tag!("\n") | tag!("\r\n")) >>
-                    bytes: apply!(stream_bytes_helper, &dict) >>
+                    bytes: apply!(stream_bytes_helper, &dict, xref, data) >>
                     //eol >> FIXME: \n or \r\n
                     ws!(tag!("endstream")) >>
                     (bytes)
@@ -408,27 +443,7 @@ named!(stream_or_dictionary <PdfObject>,
             }
         }
     )
-);
-
-named!(indirect_object <PdfObject>,
-    map!(
-        do_parse!(
-            number: digit >>
-            generation: ws!(digit) >>
-            ws!(tag!("obj")) >>
-            object: alt!(
-                boolean | real | integer | stream_or_dictionary | hex_literal | string_literal | name_object | array
-            ) >>
-            tag!("endobj") >>
-            (number, generation, object)
-        ),
-        |(n, g, object)| {
-            let number = i32::from_str(from_utf8(n).unwrap()).unwrap();
-            let generation = i32::from_str(from_utf8(g).unwrap()).unwrap();
-            PdfObject::Indirect(number, generation, Box::new(object))
-        }
-    )
-);
+}
 
 named!(reference <PdfObject>,
     map!(

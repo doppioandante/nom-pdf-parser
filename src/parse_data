@@ -1,5 +1,5 @@
 7 0 obj
-  << /Length 96 >>
+  << /Length 8 0 R >>
 stream
     BT
         /F1 12 Tf
@@ -8,3 +8,7 @@ stream
     ET
 endstream
 endobj
+
+8 0 obj
+   96
+end
