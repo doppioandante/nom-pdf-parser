@@ -12,8 +12,16 @@ enum PdfObject {
     String(Vec<u8>),
     NameObject(Vec<u8>),
     Array(Vec<PdfObject>),
-    Dictionary(Vec<(PdfObject, PdfObject)>)
+    Dictionary(Vec<(PdfObject, PdfObject)>),
+    Stream(Box<PdfObject>, Vec<u8>),
+    Indirect(i32, i32, Box<PdfObject>), // TODO i32?
+    Reference(i32, i32)
 }
+
+//impl PdfObject {
+//    fn evaluate(&self) -> PdfObject {
+//        if let PdfObject::Reference
+//    
 
 fn from_bool_literal(s:&[u8]) -> bool {
     if s == b"true" {
@@ -28,6 +36,7 @@ fn from_bool_literal(s:&[u8]) -> bool {
 named!(boolean <PdfObject>,
     map!(
         map!(
+            //TODO: use a tag that works with bytes, should be faster
             alt!(tag!("true") | tag!("false")),
             from_bool_literal
         ),
@@ -326,9 +335,107 @@ named!(dictionary <PdfObject>,
    )
 );
 
+// should probably be a macro
+fn stream_bytes<'a>(dict: &PdfObject) -> Box<Fn(&'a [u8]) -> IResult<&'a [u8], &'a [u8]>> {
+    if let PdfObject::Dictionary(ref vec) = *dict {
+        let entry = vec.iter().find(|&entry| {
+            if let (PdfObject::NameObject(ref key), _) = *entry {
+                return &key[..] == b"Length";
+            }
+            false
+        });
+
+        if let Some(&(_, PdfObject::Integer(length))) = entry {
+            Box::new(move |bytes| {
+                take!(bytes, length)
+            })
+        } else {
+            Box::new(|_| {
+                error_code!(IResult::Error(ErrorKind::Custom(4)))
+            })
+        }
+    }
+    else {
+        Box::new(|_| {
+            error_code!(IResult::Error(ErrorKind::Custom(4)))
+        })
+    }
+}
+
+// workaround, thanks #nom channel
+fn stream_bytes_helper<'a>(input: &'a [u8], dict: &PdfObject) -> IResult<&'a [u8], &'a [u8]> {
+    let f = stream_bytes(&dict);
+    f(input)
+}
+
+named!(stream_or_dictionary <PdfObject>,
+    map!(
+        do_parse!(
+            dict: dictionary >>
+            stream: opt!(
+                do_parse!(
+                    // dictionary eats previous space
+                    tag!("stream") >>
+                    alt!(tag!("\n") | tag!("\r\n")) >>
+                    bytes: apply!(stream_bytes_helper, &dict) >>
+                    //eol >> FIXME: \n or \r\n
+                    ws!(tag!("endstream")) >>
+                    (bytes)
+                )
+            ) >>
+            (dict, stream)
+        ),
+        |(dict, opt_stream)| {
+            if let Some(bytes) = opt_stream {
+                PdfObject::Stream(Box::new(dict), bytes.to_vec())
+            } else {
+                dict
+            }
+        }
+    )
+);
+
+use nom::digit;
+
+named!(indirect_object <PdfObject>,
+    map!(
+        do_parse!(
+            number: digit >>
+            generation: ws!(digit) >>
+            ws!(tag!("obj")) >>
+            object: alt!(
+                boolean | real | integer | stream_or_dictionary | hex_literal | string_literal | name_object | array
+            ) >>
+            tag!("endobj") >>
+            (number, generation, object)
+        ),
+        |(n, g, object)| {
+            let number = i32::from_str(from_utf8(n).unwrap()).unwrap();
+            let generation = i32::from_str(from_utf8(g).unwrap()).unwrap();
+            PdfObject::Indirect(number, generation, Box::new(object))
+        }
+    )
+);
+
+named!(reference <PdfObject>,
+    map!(
+        do_parse!(
+            number: digit >>
+            generation: ws!(digit) >>
+            ws!(tag!("R")) >>
+            (number, generation)
+        ),
+        |(n, g)| {
+            let number = i32::from_str(from_utf8(n).unwrap()).unwrap();
+            let generation = i32::from_str(from_utf8(g).unwrap()).unwrap();
+            PdfObject::Reference(number, generation)
+        }
+    )
+);
+
 named!(object <PdfObject>,
     alt!(
-        boolean | real | integer | dictionary | hex_literal | string_literal | name_object | array
+        boolean | reference | indirect_object | real | integer | dictionary | hex_literal | string_literal | name_object | array
     )
 );
 

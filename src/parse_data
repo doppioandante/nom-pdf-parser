@@ -1,11 +1,10 @@
-[<< /Type /Example
-    /Subtype /DictionaryExample
-    /Version 0.01
-    /IntegerItem 12
-    /StringItem ( a string )
-    /Subdictionary << /Item1 0.4
-        /Item2 true
-        /LastItem ( not ! )
-        /VeryLastItem ( OK )
-        >>
-    >>]
+7 0 obj
+  << /Length 96 >>
+stream
+    BT
+        /F1 12 Tf
+        72 712 Td
+        (A stream with an indirect length) Tj
+    ET
+endstream
+endobj
