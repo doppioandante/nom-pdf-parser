@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate nom;
 
-use nom::{digit, hex_digit, IResult, ErrorKind, Needed};
+use nom::{hex_digit, IResult, ErrorKind, Needed};
 use std::str::{FromStr, from_utf8};
 
 #[derive(Debug)]
@@ -10,7 +10,9 @@ enum PdfObject {
     Integer(i32), // TODO: see limits?
     Real(f64),
     String(Vec<u8>),
-    NameObject(Vec<u8>)
+    NameObject(Vec<u8>),
+    Array(Vec<PdfObject>),
+    Dictionary(Vec<(PdfObject, PdfObject)>)
 }
 
 fn from_bool_literal(s:&[u8]) -> bool {
@@ -38,7 +40,7 @@ named!(integer <PdfObject>,
         do_parse!(
             sign: opt!(alt!(char!('-') | char!('+'))) >>
             number: map!(
-                digit,
+                nom::digit,
                 |parsed_digits| {
                     // FIXME: is from_utf8 slow?
                     let mut value = i32::from_str(from_utf8(parsed_digits).unwrap()).unwrap();
@@ -60,10 +62,10 @@ named!(real <PdfObject>,
     map!(
         do_parse!(
             sign: opt!(alt!(char!('-') | char!('+'))) >>
-            integral: opt!(digit) >>
+            integral: opt!(nom::digit) >>
             char!('.') >>
             result: map!(
-                opt!(digit),
+                opt!(nom::digit),
                 |parsed_digits| {
                     let mut real_parsed = String::new();
                     // FIXME: is from_utf8 slow?
@@ -129,7 +131,7 @@ named!(hex_literal <PdfObject>,
     map!(
         delimited!(
             char!('<'),
-            hex_digit,
+            hex_digit, // FIXME: why doesn't nom::hex_digit work?
             char!('>')
         ),
         hex_literal_digits
@@ -211,7 +213,6 @@ fn string_literal(ss: &[u8]) -> IResult<&[u8], PdfObject> {
             result.push(escaped);
             escaped = 0u8;
         } else if let OctalEscape::None = escape_octal {
-            println!("{}", s[i]);
             if s[i] == b'\\' {
                 escape = true;
             }
@@ -240,35 +241,105 @@ fn string_literal(ss: &[u8]) -> IResult<&[u8], PdfObject> {
     IResult::Done(&s[i..], PdfObject::String(result))
 }
 
-    //map!(
-        //),
-
 fn is_whitespace(c: u8) -> bool {
     match c {
         // TODO
-        b' ' | b'\n' => true,
+        // FIXME: ] << >>
+        b' ' | b'\n' | b']' | b'<' | b'>' => true,
         _ => false
     }
 }
+
+fn escape_name_object(s: &[u8]) -> Vec<u8> {
+    let mut result = Vec::new();
+
+    let mut hex = 0u8;
+    let mut hex_count = 0u8;
+    for c in s {
+        if hex_count > 0 {
+            // TODO: check wrong hex character :(
+            hex = hex*16u8 + from_hex_char(*c);
+            hex_count -= 1;
+
+            if hex_count == 0 {
+                result.push(hex);
+                hex = 0u8;
+            }
+        }
+        else if *c == b'#' {
+            hex_count = 2;
+        }
+        else {
+            result.push(*c);
+        }
+    }
+
+    result
+}
+
 named!(name_object <PdfObject>,
     map!(
         do_parse!(
             char!('/') >>
+            //FIXME: what if [\LOL] ? is_whitespace not enough?
             res: take_till1!(is_whitespace) >>
             (res)
         ),
         |slice| {
-            PdfObject::NameObject(slice.to_vec())
+            PdfObject::NameObject(escape_name_object(slice))
         }
+    )
+);
+
+named!(array <PdfObject>,
+    // FIXME: not sure about whitespace handling
+    map!(
+        delimited!(
+            ws!(char!('[')),
+            separated_list!(
+                nom::multispace,
+                object
+            ),
+            ws!(char!(']'))
+        ),
+        PdfObject::Array
+    )
+);
+
+named!(dictionary <PdfObject>,
+   // FIXME: not sure about whitespace handling
+   map!(
+       delimited!(
+           ws!(tag!("<<")),
+           separated_list!(
+               nom::multispace,
+               // dict entry
+               do_parse!(
+                   key: ws!(name_object) >>
+                   entry: object >>
+                   (key, entry)
+               )
+           ),
+           ws!(tag!(">>"))
+       ),
+       PdfObject::Dictionary
+   )
+);
+
+named!(object <PdfObject>,
+    alt!(
+        boolean | real | integer | dictionary | hex_literal | string_literal | name_object | array
     )
 );
 
 
 fn main() {
     let data = include_bytes!("parse_data");
-    let res = name_object(data);
+    let res = object(data);
     if let IResult::Done(_, PdfObject::String(vec)) = res {
         println!("{}", from_utf8(vec.as_slice()).unwrap());
+    } else if res.is_done() {
+        println!("{:?}", res);
     } else {
         println!("Error: {:?}", res);
     }
