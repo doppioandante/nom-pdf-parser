@@ -9,7 +9,8 @@ enum PdfObject {
     Boolean(bool),
     Integer(i32), // TODO: see limits?
     Real(f64),
-    String(Vec<u8>)
+    String(Vec<u8>),
+    NameObject(Vec<u8>)
 }
 
 fn from_bool_literal(s:&[u8]) -> bool {
@@ -239,9 +240,33 @@ fn string_literal(ss: &[u8]) -> IResult<&[u8], PdfObject> {
     IResult::Done(&s[i..], PdfObject::String(result))
 }
 
+    //map!(
+        //),
+
+fn is_whitespace(c: u8) -> bool {
+    match c {
+        // TODO
+        b' ' | b'\n' => true,
+        _ => false
+    }
+}
+named!(name_object <PdfObject>,
+    map!(
+        do_parse!(
+            char!('/') >>
+            res: take_till1!(is_whitespace) >>
+            (res)
+        ),
+        |slice| {
+            PdfObject::NameObject(slice.to_vec())
+        }
+    )
+);
+
+
 fn main() {
     let data = include_bytes!("parse_data");
-    let res = string_literal(data);
+    let res = name_object(data);
     if let IResult::Done(_, PdfObject::String(vec)) = res {
         println!("{}", from_utf8(vec.as_slice()).unwrap());
     } else {
