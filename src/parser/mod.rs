@@ -3,6 +3,11 @@ extern crate nom;
 use nom::{digit, hex_digit, IResult, ErrorKind, Needed};
 use std::str::{FromStr, from_utf8};
 
+use std::collections::HashMap;
+
+// Needed to use HashMap::from_iter
+use std::iter::FromIterator;
+
 #[derive(Debug)]
 pub enum PdfObject {
     Boolean(bool),
@@ -11,7 +16,7 @@ pub enum PdfObject {
     String(Vec<u8>),
     NameObject(Vec<u8>),
     Array(Vec<PdfObject>),
-    Dictionary(Vec<(PdfObject, PdfObject)>),
+    Dictionary(HashMap<Box<[u8]>, PdfObject>),
     Stream(Box<PdfObject>, Vec<u8>),
     Indirect(i32, i32, Box<PdfObject>), // TODO i32?
     Reference(i32, i32)
@@ -336,25 +341,30 @@ named!(dictionary <PdfObject>,
            ),
            ws!(tag!(">>"))
        ),
-       PdfObject::Dictionary
+       |vec| {
+
+           let mut dict = HashMap::new();
+
+           for (key, entry) in vec {
+               if let PdfObject::NameObject(key) = key {
+                   dict.insert(key.into_boxed_slice(), entry);
+               }
+           }
+           PdfObject::Dictionary(dict)
+       }
    )
 );
 
 // should probably be a macro
 fn stream_bytes<'a>(dict: &PdfObject) -> Box<Fn(&'a [u8]) -> IResult<&'a [u8], &'a [u8]>> {
-    if let PdfObject::Dictionary(ref vec) = *dict {
-        let entry = vec.iter().find(|&entry| {
-            if let (PdfObject::NameObject(ref key), _) = *entry {
-                return &key[..] == b"Length";
-            }
-            false
-        });
+    if let PdfObject::Dictionary(ref hash_map) = *dict {
 
-        if let Some(&(_, PdfObject::Integer(length))) = entry {
+        if let Some(&PdfObject::Integer(length)) = hash_map.get(b"Length".as_ref()) {
             Box::new(move |bytes| {
-                take!(bytes, length)
+                    take!(bytes, length)
             })
-        } else {
+        }
+        else {
             Box::new(|_| {
                 error_code!(IResult::Error(ErrorKind::Custom(4)))
             })
@@ -368,7 +378,7 @@ fn stream_bytes<'a>(dict: &PdfObject) -> Box<Fn(&'a [u8]) -> IResult<&'a [u8], &
 }
 
 // workaround, thanks #nom channel
-fn stream_bytes_helper<'a>(input: &'a [u8], dict: &PdfObject) -> IResult<&'a [u8], &'a [u8]> {
+fn stream_bytes_helper<'a>(input: &'a [u8], dict: & PdfObject) -> IResult<&'a [u8], &'a [u8]> {
     let f = stream_bytes(&dict);
     f(input)
 }
