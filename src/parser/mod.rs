@@ -384,38 +384,24 @@ pub fn dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&
 
 // should probably be a macro
 // or maybe, can be merged into stream_bytes_helpers
-fn stream_bytes<'a>(dict: &PdfObject, xref: &XRef, data: &'a [u8]) -> Box<Fn(&'a [u8]) -> IResult<&'a [u8], &'a [u8]>> {
+fn stream_bytes<'a>(input: &'a [u8], dict: &PdfObject, xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     if let PdfObject::Dictionary(ref hash_map) = *dict {
         if let Some(ref object) = hash_map.get(b"Length".as_ref()) {
             // TODO: fix
         //    let length = if let object.evaluate_reference(xref, data);
-            if let Some(&PdfObject::Integer(length)) = object {
-                Box::new(move |bytes| {
-                    take!(bytes, length)
-                })
+            if let PdfObject::Integer(length) = **object {
+                take!(input, length)
             } else {
-                Box::new(|_| {
-                    error_code!(IResult::Error(ErrorKind::Custom(5)))
-                })
+                error_code!(IResult::Error(ErrorKind::Custom(5)))
             }
         }
         else {
-            Box::new(|_| {
-                error_code!(IResult::Error(ErrorKind::Custom(5)))
-            })
+            error_code!(IResult::Error(ErrorKind::Custom(5)))
         }
     }
     else {
-        Box::new(|_| {
-            error_code!(IResult::Error(ErrorKind::Custom(6)))
-        })
+        error_code!(IResult::Error(ErrorKind::Custom(6)))
     }
-}
-
-// workaround, thanks sebk from #nom channel
-fn stream_bytes_helper<'a>(input: &'a [u8], dict: &PdfObject, xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
-    let f = stream_bytes(&dict, xref, data);
-    f(input)
 }
 
 pub fn stream_or_dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
@@ -427,7 +413,7 @@ pub fn stream_or_dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) ->
                     // dictionary eats previous space
                     tag!("stream") >>
                     alt!(tag!("\n") | tag!("\r\n")) >>
-                    bytes: apply!(stream_bytes_helper, &dict, xref, data) >>
+                    bytes: apply!(stream_bytes, &dict, xref, data) >>
                     //eol >> FIXME: \n or \r\n
                     ws!(tag!("endstream")) >>
                     (bytes)
