@@ -1,6 +1,6 @@
 extern crate nom;
 
-use nom::{digit, hex_digit, IResult, ErrorKind, Needed};
+use nom::{digit, hex_digit, multispace, IResult, ErrorKind, Needed};
 use std::str::{FromStr, from_utf8};
 use std::collections::HashMap;
 
@@ -57,16 +57,17 @@ pub fn indirect_object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IRes
             number: digit >>
             generation: ws!(digit) >>
             ws!(tag!("obj")) >>
-            object: alt!(
+            o: alt!(
                 boolean | real | integer | apply!(stream_or_dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
             ) >>
+            opt!(multispace) >>
             tag!("endobj") >>
-            (number, generation, object)
+            (number, generation, o)
         ),
-        |(n, g, object)| {
+        |(n, g, o)| {
             let number = i32::from_str(from_utf8(n).unwrap()).unwrap();
             let generation = i32::from_str(from_utf8(g).unwrap()).unwrap();
-            PdfObject::Indirect(number, generation, Box::new(object))
+            PdfObject::Indirect(number, generation, Box::new(o))
         }
     )
 }
@@ -178,7 +179,7 @@ named!(hex_literal <PdfObject>,
     map!(
         delimited!(
             char!('<'),
-            hex_digit, // FIXME: why doesn't nom::hex_digit work?
+            hex_digit,
             char!('>')
         ),
         hex_literal_digits
@@ -344,7 +345,7 @@ pub fn array<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u
         delimited!(
             ws!(char!('[')),
             separated_list!(
-                nom::multispace,
+                multispace,
                 apply!(object, xref, data)
             ),
             ws!(char!(']'))
@@ -359,7 +360,7 @@ pub fn dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&
        delimited!(
            ws!(tag!("<<")),
            separated_list!(
-               nom::multispace,
+               multispace,
                // dict entry
                do_parse!(
                    key: ws!(name_object) >>
@@ -387,9 +388,10 @@ pub fn dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&
 fn stream_bytes<'a>(input: &'a [u8], dict: &PdfObject, xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     if let PdfObject::Dictionary(ref hash_map) = *dict {
         if let Some(ref object) = hash_map.get(b"Length".as_ref()) {
-            // TODO: fix
-        //    let length = if let object.evaluate_reference(xref, data);
-            if let PdfObject::Integer(length) = **object {
+            if let Some(PdfObject::Integer(reflen)) = object.evaluate_reference(xref, data) {
+                take!(input, reflen)
+            }
+            else if let PdfObject::Integer(length) = **object {
                 take!(input, length)
             } else {
                 error_code!(IResult::Error(ErrorKind::Custom(5)))
