@@ -285,8 +285,15 @@ fn string_literal(ss: &[u8]) -> IResult<&[u8], PdfObject> {
 
         if let OctalEscape::Parsing(n) = escape_octal {
             if s[i] >= b'0' && s[i] <= b'7' {
-                // FIXME: handle overflow
-                octal = 8*octal + s[i] - b'0';
+                let checked_res = 8u8.checked_mul(octal).and_then(
+                    |x| x.checked_add(s[i] - b'0')
+                );
+                if let Some(val) = checked_res {
+                    octal = val;
+                } else {
+                    // FIXME: how to bail out?
+                    return IResult::Error(ErrorKind::Custom(10));
+                }
                 escape_octal = OctalEscape::Parsing(n-1)
             } else {
                 escape_octal = OctalEscape::Complete;
