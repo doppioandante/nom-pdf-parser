@@ -11,20 +11,22 @@ use super::XRef;
 pub enum PdfObject {
     Null,
     Boolean(bool),
-    Integer(i32), // TODO: see limits?
-    Real(f64),
+    Integer(i32),
+    Real(f32),
     String(Vec<u8>),
-    NameObject(Vec<u8>),
+    NameObject(Vec<u8>), //FIXME: max length 127
     Array(Vec<PdfObject>),
     Dictionary(HashMap<Box<[u8]>, PdfObject>),
     Stream(Box<PdfObject>, Vec<u8>),
-    Indirect(i32, i32, Box<PdfObject>), // TODO i32?
+    Indirect(i32, i32, Box<PdfObject>),
     Reference(i32, i32)
 }
 
 impl PdfObject {
     fn evaluate_reference(&self, xref: &XRef, data: &[u8]) -> Option<PdfObject> {
         if let &PdfObject::Reference(n, _) = self {
+            // FIXME: offset is limited by the integer length (i32)
+            // but the xref table has 10 digits, so it should be a i64
             let offset = xref.get_offset(n as u32) as usize;
             let res = object(&data[offset..], xref, data);
             if let IResult::Done(_, PdfObject::Indirect(_, _, o)) = res {
@@ -166,7 +168,7 @@ named!(real <PdfObject>,
                     if parsed_digits.is_some() {
                         real_parsed += unsafe{ from_utf8_unchecked(parsed_digits.unwrap()) }
                     }
-                    f64::from_str(real_parsed.as_str()).unwrap()
+                    f32::from_str(real_parsed.as_str()).unwrap()
                 }
             ) >>
             (result)
@@ -439,6 +441,7 @@ pub fn dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&
 fn stream_bytes<'a>(input: &'a [u8], dict: &PdfObject, xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     if let PdfObject::Dictionary(ref hash_map) = *dict {
         if let Some(ref object) = hash_map.get(b"Length".as_ref()) {
+            // FIXME: maximum length allowed for a stream is 32767
             if let Some(PdfObject::Integer(reflen)) = object.evaluate_reference(xref, data) {
                 take!(input, reflen)
             }
@@ -466,7 +469,7 @@ pub fn stream_or_dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) ->
                     tag!("stream") >>
                     alt!(tag!("\n") | tag!("\r\n")) >>
                     bytes: apply!(stream_bytes, &dict, xref, data) >>
-                    alt!(tag!("\n") | tag!("\r\n")) >> //FIXME: maybe can be \r alone here
+                    alt!(tag!("\n") | tag!("\r\n") | tag!("\r")) >>
                     tag!("endstream") >>
                     (bytes)
                 )
