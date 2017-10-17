@@ -1,5 +1,5 @@
 [package]
-name = "pdf-render"
+name = "nom-pdf-parser"
 version = "0.1.0"
 authors = ["Enrico Lumetti <enrico.lumetti@gmail.com>"]
 
