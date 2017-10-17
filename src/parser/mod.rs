@@ -1,7 +1,7 @@
 extern crate nom;
 
 use nom::{digit, hex_digit, IResult, ErrorKind, Needed};
-use std::str::{FromStr, from_utf8};
+use std::str::{FromStr, from_utf8, from_utf8_unchecked};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -128,7 +128,9 @@ named!(integer <PdfObject>,
                 digit,
                 |parsed_digits| {
                     // FIXME: is from_utf8 slow?
-                    let mut value = i32::from_str(from_utf8(parsed_digits).unwrap()).unwrap();
+                    let mut value = i32::from_str(unsafe {
+                        from_utf8_unchecked(parsed_digits)
+                    }).unwrap();
                     if let Some(c) = sign {
                         if c == '-' {
                             value = -value;
@@ -158,11 +160,11 @@ named!(real <PdfObject>,
                         real_parsed.push(c);
                     }
                     if let Some(parsed) = integral {
-                        real_parsed += from_utf8(parsed).unwrap();
+                        real_parsed += unsafe{ from_utf8_unchecked(parsed) };
                     }
                     real_parsed += ".";
                     if parsed_digits.is_some() {
-                        real_parsed += from_utf8(parsed_digits.unwrap()).unwrap();
+                        real_parsed += unsafe{ from_utf8_unchecked(parsed_digits.unwrap()) }
                     }
                     f64::from_str(real_parsed.as_str()).unwrap()
                 }
@@ -490,8 +492,12 @@ named!(reference <PdfObject>,
             (number, generation)
         ),
         |(n, g)| {
-            let number = i32::from_str(from_utf8(n).unwrap()).unwrap();
-            let generation = i32::from_str(from_utf8(g).unwrap()).unwrap();
+            let number = i32::from_str(unsafe {
+                from_utf8_unchecked(n)
+            }).unwrap();
+            let generation = i32::from_str(unsafe {
+                from_utf8_unchecked(g)
+            }).unwrap();
             PdfObject::Reference(number, generation)
         }
     )

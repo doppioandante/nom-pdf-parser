@@ -1,7 +1,9 @@
 7 0 obj
   << /Length 8 0 R 
      /NullField null
-     /Arr [0 1 [2 4]] >>
+     /Arr [0 1 [2 4]]
+     /S (ss\
+d) >>
 
 stream
     BT
