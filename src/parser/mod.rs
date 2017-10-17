@@ -7,6 +7,8 @@ use std::fmt::Debug;
 
 use super::XRef;
 
+// TODO: use enum for error codes (CustomError)
+
 #[derive(Debug, PartialEq)]
 pub enum PdfObject {
     Null,
