@@ -1,13 +1,15 @@
 extern crate nom;
 
-use nom::{digit, hex_digit, multispace, IResult, ErrorKind, Needed};
+use nom::{digit, hex_digit, IResult, ErrorKind, Needed};
 use std::str::{FromStr, from_utf8};
 use std::collections::HashMap;
+use std::fmt::Debug;
 
 use super::XRef;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum PdfObject {
+    Null,
     Boolean(bool),
     Integer(i32), // TODO: see limits?
     Real(f64),
@@ -33,34 +35,50 @@ impl PdfObject {
         None
     }
 }
-    
 
-fn from_bool_literal(s:&[u8]) -> bool {
-    if s == b"true" {
-        return true;
+pub fn eat_until_next_token(input: &[u8]) -> IResult<&[u8], ()> {
+    let mut i = 0;
+    while i < input.len() {
+        if !is_space(input[i]) {
+            break;
+        }
+        i += 1;
     }
-    if s == b"false" {
-        return false;
-    }
-    unreachable!();
+
+//    println!("debug:\n{}\nSTRIPPED\n:{}\n", from_utf8(input).unwrap(), from_utf8(&input[i..]).unwrap());
+    IResult::Done(&input[i..], ())
 }
 
+macro_rules! fs(
+  ($i:expr, $($args:tt)*) => (
+    {
+      let r = do_parse!($i,
+          res: $($args)* >>
+          eat_until_next_token >>
+          (res)
+      );
+      //debug_res(&r);
+      r
+    }
+  )
+);
+
+    
 pub fn object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
     alt!(input,
-        boolean | reference | apply!(indirect_object, xref, data) | real | integer | apply!(dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
+        null | boolean | reference | apply!(indirect_object, xref, data) | real | integer | apply!(dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
     )
 }
 
 pub fn indirect_object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
     map!(input,
         do_parse!(
-            number: digit >>
-            generation: ws!(digit) >>
-            ws!(tag!("obj")) >>
-            o: alt!(
-                boolean | real | integer | apply!(stream_or_dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
-            ) >>
-            opt!(multispace) >>
+            number: fs!(digit) >>
+            generation: fs!(digit) >>
+            fs!(tag!("obj")) >>
+            o: fs!(alt!(
+                null | boolean | real | integer | apply!(stream_or_dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
+            )) >>
             tag!("endobj") >>
             (number, generation, o)
         ),
@@ -70,6 +88,23 @@ pub fn indirect_object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IRes
             PdfObject::Indirect(number, generation, Box::new(o))
         }
     )
+}
+
+named!(null <PdfObject>,
+    do_parse!(
+        tag!("null") >>
+        (PdfObject::Null)
+    )
+);
+
+fn from_bool_literal(s:&[u8]) -> bool {
+    if s == b"true" {
+        return true;
+    }
+    if s == b"false" {
+        return false;
+    }
+    unreachable!();
 }
 
 named!(boolean <PdfObject>,
@@ -289,13 +324,22 @@ fn string_literal(ss: &[u8]) -> IResult<&[u8], PdfObject> {
     IResult::Done(&s[i..], PdfObject::String(result))
 }
 
-fn is_whitespace(c: u8) -> bool {
+fn is_space(c: u8) -> bool {
     match c {
-        // TODO
-        // FIXME: ] << >>
-        b' ' | b'\n' | b']' | b'<' | b'>' => true,
+        0x00 | 0x09 | 0x0A | 0x0C | 0x0D | 0x20 => true,
         _ => false
     }
+}
+
+fn is_delimiter(c: u8) -> bool {
+    match c {
+        b'(' |  b')' |  b'<' |  b'>' |  b'[' |  b']' |  b'{' |  b'}' |  b'/' |  b'%' => true,
+        _ => false
+    }
+}
+
+fn is_regular(c: u8) -> bool {
+    !is_space(c) && !is_delimiter(c)
 }
 
 fn escape_name_object(s: &[u8]) -> Vec<u8> {
@@ -329,8 +373,7 @@ named!(name_object <PdfObject>,
     map!(
         do_parse!(
             char!('/') >>
-            //FIXME: what if [\LOL] ? is_whitespace not enough?
-            res: take_till1!(is_whitespace) >>
+            res: take_while1!(is_regular) >>
             (res)
         ),
         |slice| {
@@ -340,42 +383,48 @@ named!(name_object <PdfObject>,
 );
 
 pub fn array<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
-    // FIXME: not sure about whitespace handling
     map!(input,
         delimited!(
-            ws!(char!('[')),
-            separated_list!(
-                multispace,
-                apply!(object, xref, data)
+            fs!(char!('[')),
+            many0!(
+                fs!(apply!(object, xref, data))
             ),
-            ws!(char!(']'))
+            char!(']')
         ),
         PdfObject::Array
     )
 }
 
+fn debug_res<O>(r: &IResult<&[u8], O>)
+        where O: Debug {
+    if let IResult::Done(to_consume, ref o) = *r {
+        println!("to consume: {}\nparsed: {:?}", from_utf8(to_consume).unwrap(), o);
+    } else {
+        println!("error: {:?}", r);
+    }
+}
+
 pub fn dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
-   // FIXME: not sure about whitespace handling
    map!(input,
        delimited!(
-           ws!(tag!("<<")),
-           separated_list!(
-               multispace,
-               // dict entry
+           fs!(tag!("<<")),
+           many1!(
                do_parse!(
-                   key: ws!(name_object) >>
-                   entry: apply!(object, xref, data) >>
+                   key: fs!(name_object) >>
+                   entry: fs!(apply!(object, xref, data)) >>
                    (key, entry)
                )
            ),
-           ws!(tag!(">>"))
+           tag!(">>")
        ),
        |vec| {
            let mut dict = HashMap::new();
 
            for (key, entry) in vec {
                if let PdfObject::NameObject(key) = key {
-                   dict.insert(key.into_boxed_slice(), entry);
+                   if entry != PdfObject::Null {
+                       dict.insert(key.into_boxed_slice(), entry);
+                   }
                }
            }
            PdfObject::Dictionary(dict)
@@ -383,8 +432,6 @@ pub fn dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&
    )
 }
 
-// should probably be a macro
-// or maybe, can be merged into stream_bytes_helpers
 fn stream_bytes<'a>(input: &'a [u8], dict: &PdfObject, xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     if let PdfObject::Dictionary(ref hash_map) = *dict {
         if let Some(ref object) = hash_map.get(b"Length".as_ref()) {
@@ -394,7 +441,7 @@ fn stream_bytes<'a>(input: &'a [u8], dict: &PdfObject, xref: &XRef, data: &'a [u
             else if let PdfObject::Integer(length) = **object {
                 take!(input, length)
             } else {
-                error_code!(IResult::Error(ErrorKind::Custom(5)))
+                error_code!(IResult::Error(ErrorKind::Custom(4)))
             }
         }
         else {
@@ -409,15 +456,14 @@ fn stream_bytes<'a>(input: &'a [u8], dict: &PdfObject, xref: &XRef, data: &'a [u
 pub fn stream_or_dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
     map!(input,
         do_parse!(
-            dict: apply!(dictionary, xref, data) >>
+            dict: fs!(apply!(dictionary, xref, data)) >>
             stream: opt!(
                 do_parse!(
-                    // dictionary eats previous space
                     tag!("stream") >>
                     alt!(tag!("\n") | tag!("\r\n")) >>
                     bytes: apply!(stream_bytes, &dict, xref, data) >>
-                    //eol >> FIXME: \n or \r\n
-                    ws!(tag!("endstream")) >>
+                    alt!(tag!("\n") | tag!("\r\n")) >> //FIXME: maybe can be \r alone here
+                    tag!("endstream") >>
                     (bytes)
                 )
             ) >>
@@ -436,9 +482,9 @@ pub fn stream_or_dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) ->
 named!(reference <PdfObject>,
     map!(
         do_parse!(
-            number: digit >>
-            generation: ws!(digit) >>
-            ws!(tag!("R")) >>
+            number: fs!(digit) >>
+            generation: fs!(digit) >>
+            tag!("R") >>
             (number, generation)
         ),
         |(n, g)| {
