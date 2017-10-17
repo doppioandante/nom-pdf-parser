@@ -39,26 +39,29 @@ impl PdfObject {
 pub fn eat_until_next_token(input: &[u8]) -> IResult<&[u8], ()> {
     let mut i = 0;
     while i < input.len() {
+        if input[i] == b'%' {
+            while i < input.len() && input[i] != b'\r' && input[i] != b'\n' {
+                i += 1;
+            }
+        }
         if !is_space(input[i]) {
             break;
         }
+
         i += 1;
     }
 
-//    println!("debug:\n{}\nSTRIPPED\n:{}\n", from_utf8(input).unwrap(), from_utf8(&input[i..]).unwrap());
     IResult::Done(&input[i..], ())
 }
 
 macro_rules! fs(
   ($i:expr, $($args:tt)*) => (
     {
-      let r = do_parse!($i,
+      do_parse!($i,
           res: $($args)* >>
           eat_until_next_token >>
           (res)
-      );
-      //debug_res(&r);
-      r
+      )
     }
   )
 );
@@ -110,7 +113,6 @@ fn from_bool_literal(s:&[u8]) -> bool {
 named!(boolean <PdfObject>,
     map!(
         map!(
-            //TODO: use a tag that works with bytes, should be faster
             alt!(tag!("true") | tag!("false")),
             from_bool_literal
         ),
