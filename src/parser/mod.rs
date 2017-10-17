@@ -182,6 +182,7 @@ fn from_hex_char(s: u8) -> u8  {
 
     let c = HEX_DIGITS.iter().position(
         |&c| {
+            assert!(is_hex_digit(c));
             c == if b'a' <= s && s <= b'f' {
                 s - (b'a' - b'A')
             } else {
@@ -348,20 +349,29 @@ fn is_regular(c: u8) -> bool {
     !is_space(c) && !is_delimiter(c)
 }
 
-fn escape_name_object(s: &[u8]) -> Vec<u8> {
+fn is_hex_digit(x: u8) -> bool {
+     (x < b'0' || x > b'9')
+     && (x < b'a' || x > b'f')
+     && (x < b'A' || x > b'F')
+}
+
+fn escape_name_object(s: &[u8]) -> Option<Vec<u8>> {
     let mut result = Vec::new();
 
     let mut hex = 0u8;
     let mut hex_count = 0u8;
     for c in s {
         if hex_count > 0 {
-            // TODO: check wrong hex character :(
-            hex = hex*16u8 + from_hex_char(*c);
-            hex_count -= 1;
+            if is_hex_digit(*c) {
+                hex = hex*16u8 + from_hex_char(*c);
+                hex_count -= 1;
 
-            if hex_count == 0 {
-                result.push(hex);
-                hex = 0u8;
+                if hex_count == 0 {
+                    result.push(hex);
+                    hex = 0u8;
+                }
+            } else {
+                return None;
             }
         }
         else if *c == b'#' {
@@ -372,18 +382,18 @@ fn escape_name_object(s: &[u8]) -> Vec<u8> {
         }
     }
 
-    result
+    Some(result)
 }
 
 named!(name_object <PdfObject>,
-    map!(
+    map_opt!(
         do_parse!(
             char!('/') >>
             res: take_while1!(is_regular) >>
             (res)
         ),
         |slice| {
-            PdfObject::NameObject(escape_name_object(slice))
+            escape_name_object(slice).map(PdfObject::NameObject)
         }
     )
 );
