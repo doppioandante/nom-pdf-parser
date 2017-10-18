@@ -7,6 +7,9 @@ use std::fmt::Debug;
 
 use super::XRef;
 
+//mod xref;
+//pub use self::xref::*;
+
 // TODO: use enum for error codes (CustomError)
 
 #[derive(Debug, PartialEq)]
@@ -30,12 +33,13 @@ impl PdfObject {
             // FIXME: offset is limited by the integer length (i32)
             // but the xref table has 10 digits, so it should be a i64
             let offset = xref.get_offset(n as u32) as usize;
-            let res = object(&data[offset..], xref, data);
+            let res = indirect_object(&data[offset..], xref, data);
             if let IResult::Done(_, PdfObject::Indirect(_, _, o)) = res {
                 return Some(*o)
             }
         }
 
+        // FIXME: should actually be Null
         None
     }
 }
@@ -71,12 +75,6 @@ macro_rules! fs(
 );
 
     
-pub fn object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
-    alt!(input,
-        null | boolean | reference | apply!(indirect_object, xref, data) | real | integer | apply!(dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
-    )
-}
-
 pub fn indirect_object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
     map!(input,
         do_parse!(
@@ -90,10 +88,20 @@ pub fn indirect_object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IRes
             (number, generation, o)
         ),
         |(n, g, o)| {
-            let number = i32::from_str(from_utf8(n).unwrap()).unwrap();
-            let generation = i32::from_str(from_utf8(g).unwrap()).unwrap();
+            let number = i32::from_str(unsafe {
+                from_utf8_unchecked(n)
+            }).unwrap();
+            let generation = i32::from_str(unsafe {
+                from_utf8_unchecked(g)
+            }).unwrap();
             PdfObject::Indirect(number, generation, Box::new(o))
         }
+    )
+}
+
+pub fn direct_object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
+    alt!(input,
+        null | boolean | reference | real | integer | apply!(dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
     )
 }
 
@@ -124,6 +132,7 @@ named!(boolean <PdfObject>,
     )
 );
 
+// TODO: use tag instead of char? char with u8 only
 named!(integer <PdfObject>,
     map!(
         do_parse!(
@@ -359,9 +368,9 @@ fn is_regular(c: u8) -> bool {
 }
 
 fn is_hex_digit(x: u8) -> bool {
-     (x < b'0' || x > b'9')
-     && (x < b'a' || x > b'f')
-     && (x < b'A' || x > b'F')
+     (x >= b'0' && x <= b'9')
+     || (x >= b'a' && x <= b'f')
+     || (x >= b'A' && x <= b'F')
 }
 
 fn escape_name_object(s: &[u8]) -> Option<Vec<u8>> {
@@ -412,7 +421,7 @@ pub fn array<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u
         delimited!(
             fs!(char!('[')),
             many0!(
-                fs!(apply!(object, xref, data))
+                fs!(apply!(direct_object, xref, data))
             ),
             char!(']')
         ),
@@ -433,10 +442,10 @@ pub fn dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&
    map!(input,
        delimited!(
            fs!(tag!("<<")),
-           many1!(
+           many0!(
                do_parse!(
                    key: fs!(name_object) >>
-                   entry: fs!(apply!(object, xref, data)) >>
+                   entry: fs!(apply!(direct_object, xref, data)) >>
                    (key, entry)
                )
            ),
