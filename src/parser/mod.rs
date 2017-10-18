@@ -99,10 +99,31 @@ pub fn indirect_object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IRes
     )
 }
 
+//pub fn direct_object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
+//    alt!(input,
+//        null | boolean | reference | real | integer | apply!(dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
+//    )
+//}
+
 pub fn direct_object<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
-    alt!(input,
-        null | boolean | reference | real | integer | apply!(dictionary, xref, data) | hex_literal | string_literal | name_object | apply!(array, xref, data)
-    )
+    if input.len() > 0 {
+        match input[0] {
+            b'n' => null(input),
+            b'0' ... b'9' => alt!(input, reference | real |integer),
+            b'-' | b'+' => alt!(input, real | integer),
+            b'.' => real(input),
+            b't' | b'f' => boolean(input),
+            b'(' => string_literal(input),
+            b'<' => alt!(input, hex_literal | apply!(dictionary, xref, data)),
+            b'/' => name_object(input),
+            b'[' => array(input, xref, data),
+            b']' => IResult::Error(ErrorKind::Char),
+            b'>' => IResult::Error(ErrorKind::Char),
+            _ => panic!("Invalid character")
+        }
+    } else {
+        IResult::Incomplete(Needed::Size(1))
+    }
 }
 
 named!(null <PdfObject>,
