@@ -210,55 +210,43 @@ named!(real <PdfObject>,
 );
 
 fn from_hex_char(s: u8) -> u8  {
-    const HEX_DIGITS: &'static [u8] = b"0123456789ABCDEF";
+    match s {
+        b'0' ... b'9' => s - b'0',
+        b'a' ... b'f' => s - b'a' + 10,
+        b'A' ... b'F' => s - b'A' + 10,
+        _ => unreachable!()
+    }
+}
 
-    let c = HEX_DIGITS.iter().position(
-        |&c| {
-            assert!(is_hex_digit(c));
-            c == if b'a' <= s && s <= b'f' {
-                s - (b'a' - b'A')
-            } else {
-                s
+fn hex_literal<'a>(s: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
+    if s.len() > 0 {
+        if s[0] == b'<' {
+            let mut result = Vec::new();
+            let mut i = 1;
+            let mut c = 0;
+            while i < s.len() && s[i] != b'>' {
+                if !is_hex_digit(s[i]) {
+                    return IResult::Error(ErrorKind::Char);
+                }
+                if i%2 == 0 {
+                    result.push(16u8 * c + from_hex_char(s[i]));
+                } else {
+                    c = from_hex_char(s[i]);
+                }
+                i += 1;
             }
-        }).unwrap();
-    return c as u8;
-}
+            if i % 2 != 0 {
+                result.push(16u8 * c);
+            }
 
-fn hex_literal_digits(s: &[u8]) -> PdfObject {
-    // TODO: see max string length limit
-    let max_iter = if s.len() % 2 == 0 {
-        s.len()
+            IResult::Done(&s[i+1..], PdfObject::String(result))
+        } else {
+            IResult::Error(ErrorKind::Char)
+        }
     } else {
-        s.len() - 1
-    };
-
-    let mut result = Vec::with_capacity((max_iter + 1) / 2);
-    let mut i = 0;
-    while i < max_iter {
-        let c1 = from_hex_char(s[i]);
-        let c2 = from_hex_char(s[i+1]);
-        result.push(c1*16u8 + c2);
-        i += 2;
+        IResult::Incomplete(Needed::Size(1))
     }
-
-    if s.len() % 2 != 0 {
-        let c = from_hex_char(s[i]);
-        result.push(16u8 * c);
-    }
-
-    return PdfObject::String(result);
 }
-
-named!(hex_literal <PdfObject>,
-    map!(
-        delimited!(
-            char!('<'),
-            hex_digit,
-            char!('>')
-        ),
-        hex_literal_digits
-    )
-);
 
 fn string_literal(ss: &[u8]) -> IResult<&[u8], PdfObject> {
     let opening = char!(ss, '(');
@@ -394,48 +382,44 @@ fn is_hex_digit(x: u8) -> bool {
      || (x >= b'A' && x <= b'F')
 }
 
-fn escape_name_object(s: &[u8]) -> Option<Vec<u8>> {
-    let mut result = Vec::new();
+fn name_object<'a>(s: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
+    if s.len() > 0 {
+        if s[0] == b'/' {
+            let mut result = Vec::new();
+            let mut i = 1;
+            let mut hex = 0u8;
+            let mut hex_count = 0u8;
+            while is_regular(s[i]) {
+                if hex_count > 0 {
+                    if is_hex_digit(s[i]) {
+                        hex = hex*16u8 + from_hex_char(s[i]);
+                        hex_count -= 1;
 
-    let mut hex = 0u8;
-    let mut hex_count = 0u8;
-    for c in s {
-        if hex_count > 0 {
-            if is_hex_digit(*c) {
-                hex = hex*16u8 + from_hex_char(*c);
-                hex_count -= 1;
-
-                if hex_count == 0 {
-                    result.push(hex);
-                    hex = 0u8;
+                        if hex_count == 0 {
+                            result.push(hex);
+                            hex = 0u8;
+                        }
+                    } else {
+                        return IResult::Error(ErrorKind::Char);
+                    }
                 }
-            } else {
-                return None;
+                else if s[i] == b'#' {
+                    hex_count = 2;
+                }
+                else {
+                    result.push(s[i]);
+                }
+                i += 1;
             }
+
+            IResult::Done(&s[i..], PdfObject::NameObject(result))
+        } else {
+            IResult::Error(ErrorKind::Char)
         }
-        else if *c == b'#' {
-            hex_count = 2;
-        }
-        else {
-            result.push(*c);
-        }
+    } else {
+        IResult::Incomplete(Needed::Size(1))
     }
-
-    Some(result)
 }
-
-named!(name_object <PdfObject>,
-    map_opt!(
-        do_parse!(
-            char!('/') >>
-            res: take_while1!(is_regular) >>
-            (res)
-        ),
-        |slice| {
-            escape_name_object(slice).map(PdfObject::NameObject)
-        }
-    )
-);
 
 pub fn array<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
     map!(input,
