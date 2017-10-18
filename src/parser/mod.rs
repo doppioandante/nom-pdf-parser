@@ -21,7 +21,7 @@ pub enum PdfObject {
     String(Vec<u8>),
     NameObject(Vec<u8>), //FIXME: max length 127
     Array(Vec<PdfObject>),
-    Dictionary(HashMap<Box<[u8]>, PdfObject>),
+    Dictionary(HashMap<Vec<u8>, PdfObject>),
     Stream(Box<PdfObject>, Vec<u8>),
     Indirect(i32, i32, Box<PdfObject>),
     Reference(i32, i32)
@@ -460,32 +460,61 @@ fn debug_res<O>(r: &IResult<&[u8], O>)
 }
 
 pub fn dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
-   map!(input,
-       delimited!(
-           fs!(tag!("<<")),
-           many0!(
-               do_parse!(
-                   key: fs!(name_object) >>
-                   entry: fs!(apply!(direct_object, xref, data)) >>
-                   (key, entry)
-               )
-           ),
-           tag!(">>")
-       ),
-       |vec| {
-           let mut dict = HashMap::new();
-
-           for (key, entry) in vec {
-               if let PdfObject::NameObject(key) = key {
-                   if entry != PdfObject::Null {
-                       dict.insert(key.into_boxed_slice(), entry);
-                   }
-               }
-           }
-           PdfObject::Dictionary(dict)
-       }
-   )
+    let mut dict = HashMap::new();
+    map!(input,
+         delimited!(
+             fs!(tag!("<<")),
+             many0!(
+                 do_parse!(
+                     key: fs!(name_object) >>
+                         entry: fs!(apply!(direct_object, xref, data)) >>
+                         ({
+                             match key {
+                                 PdfObject::NameObject(key) => match entry {
+                                     PdfObject::Null => {},
+                                     e => { dict.insert(key, e); }
+                                 },
+                                 _ => {}
+                             }
+                             ()
+                         })
+                 )
+             ),
+             tag!(">>")
+         ),
+         |_| {
+             PdfObject::Dictionary(dict)
+         }
+    )
 }
+
+//pub fn dictionary<'a>(input: &'a [u8], xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], PdfObject> {
+//   map!(input,
+//       delimited!(
+//           fs!(tag!("<<")),
+//           many0!(
+//               do_parse!(
+//                   key: fs!(name_object) >>
+//                   entry: fs!(apply!(direct_object, xref, data)) >>
+//                   (key, entry)
+//               )
+//           ),
+//           tag!(">>")
+//       ),
+//       |vec| {
+//           let mut dict = HashMap::new();
+//
+//           for (key, entry) in vec {
+//               if let PdfObject::NameObject(key) = key {
+//                   if entry != PdfObject::Null {
+//                       dict.insert(key.into_boxed_slice(), entry);
+//                   }
+//               }
+//           }
+//           PdfObject::Dictionary(dict)
+//       }
+//   )
+//}
 
 fn stream_bytes<'a>(input: &'a [u8], dict: &PdfObject, xref: &XRef, data: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     if let PdfObject::Dictionary(ref hash_map) = *dict {
