@@ -11,34 +11,39 @@ use std::vec::Vec;
 use std::time::{Duration, SystemTime};
 
 fn main() {
-    let mut f = File::open("PDF32000_2008.pdf").unwrap();
-    let mut content = Vec::new();
+    let mut cnt = 0;
+    while cnt < 5 {
+        let mut f = File::open("/home/enrico/Downloads/pdf_reference_1-7.pdf").unwrap();
+        let mut content = Vec::new();
 
-    f.read_to_end(&mut content);
+        f.read_to_end(&mut content);
 
-    let mut xref = pdf::XRef::new();
+        let mut xref = pdf::XRef::new();
 
-    let mut count = 0;
-    let mut input = &content[..];
-    let now = SystemTime::now();
-    loop {
-        let res = do_parse!(input,
-            eat_until_next_token >>
-            apply!(indirect_object, &xref, &content[..]) >>
-            ()
-        );
+        let mut count = 0;
+        let mut input = &content[..];
+        //let now = SystemTime::now();
+        loop {
+            let res = do_parse!(input,
+                eat_until_next_token >>
+                apply!(indirect_object, &xref, &content[..]) >>
+                ()
+            );
 
-        if let IResult::Done(next, _) = res {
-            count += 1;
-            input = next;
-        } else {
-            break;
+            if let IResult::Done(next, _) = res {
+                count += 1;
+                input = next;
+            } else {
+                break;
+            }
         }
-    }
-    if let Ok(elapsed) = now.elapsed() {
-        println!("Time: {}s", elapsed.as_secs() as f64
-                           + elapsed.subsec_nanos() as f64 * 1e-9);
+        //if let Ok(elapsed) = now.elapsed() {
+        //    println!("Time: {}s", elapsed.as_secs() as f64
+        //                       + elapsed.subsec_nanos() as f64 * 1e-9);
+        //}
+
+        //println!("Objects read: {}", count);
+        cnt += 1;
     }
 
-    println!("Objects read: {}", count);
 }
